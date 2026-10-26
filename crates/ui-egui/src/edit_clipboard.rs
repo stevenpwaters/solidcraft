@@ -382,6 +382,22 @@ pub fn cut(app: &mut SolveApp) -> bool {
     true
 }
 
+/// Cut the selected timeline features. The document does not change; the features wait for Paste.
+fn cut_features(app: &mut SolveApp) -> bool {
+    let features = crate::timeline::selected_feature_ids(app);
+    if features.is_empty() {
+        app.set_status("Select sketch geometry or timeline features to cut", true);
+        return false;
+    }
+    let Ok(out) = app.run("timeline.cut", json!({ "features": features })) else { return false };
+    app.linked_design_clipboard = None;
+    let names: Vec<&str> = out.get("cut").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    app.set_status(format!("Cut {}", names.join(", ")), false);
+    // Like a copy, the cut leaves text on the system clipboard, so the window system sends Paste.
+    leave_text(format!("SolidCraft features: {}", names.join(", ")));
+    true
+}
+
 /// The point of the active sketch under `at` (screen), when `at` is over the viewport.
 fn sketch_point(app: &SolveApp, at: Option<Pos2>) -> Option<[f64; 2]> {
     let at = at?;
