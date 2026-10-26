@@ -529,7 +529,7 @@ mod tests {
         run(&mut s, "sketch.finish", json!({}));
         let part = run(&mut s, "component.create", json!({"name": "Part"}))["component"].as_u64().unwrap_or(0);
         let first = s.doc.occurrence_of(part).map(|o| o.id).unwrap_or(0);
-        run(&mut s, "occurrence.move", json!({"occurrence": first, "translate": [100, 0, 0], "capture": true}));
+        run(&mut s, "occurrence.move", json!({"occurrence": first, "translate": [100, 0, 0], "capture": true, "move_grounded": true}));
         run(&mut s, "component.activate", json!({"component": 0}));
         (s, part)
     }
