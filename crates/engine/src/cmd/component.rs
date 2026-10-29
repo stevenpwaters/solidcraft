@@ -19,6 +19,8 @@ use crate::{Result, Session};
 
 const EDIT_IN_PLACE_CONTRACT: TypedContract<EditInPlaceParams> = TypedContract::new();
 const FINISH_EDIT_CONTRACT: TypedContract<FinishEditParams> = TypedContract::new();
+const MOVE_FEATURES_CONTRACT: TypedContract<MoveFeaturesParams> = TypedContract::new();
+const REPARENT_ITEMS_CONTRACT: TypedContract<ReparentItemsParams> = TypedContract::new();
 
 #[path = "component_align.rs"]
 mod align;
@@ -28,12 +30,16 @@ mod drag;
 mod foreign;
 #[path = "component_matrix.rs"]
 pub(super) mod matrix;
+#[path = "component_move_features.rs"]
+mod move_features;
 #[path = "component_placing.rs"]
 pub(super) mod placing;
 #[path = "component_properties.rs"]
 pub(super) mod properties;
 #[path = "component_reparent.rs"]
 mod reparent;
+#[path = "component_reparent_items.rs"]
+mod reparent_items;
 #[path = "component_transfer.rs"]
 mod transfer;
 

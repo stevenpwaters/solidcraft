@@ -207,30 +207,6 @@ fn ctrl_c_ctrl_v_outside_a_sketch_copies_and_pastes_timeline_features() {
 }
 
 #[test]
-fn ctrl_x_outside_a_sketch_cuts_the_selected_features_and_ctrl_v_moves_them_into_the_active_component() {
-    let mut h = Harness::new();
-    h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
-    let (id, name) = (h.app.session.doc.features[0].id, h.app.session.doc.features[0].name.clone());
-    let part = h.app.run("component.create", json!({"name": "Part"})).unwrap();
-    let (component, occurrence) = (part["component"].as_u64().unwrap(), part["occurrence"].as_u64().unwrap());
-    h.app.run("component.activate", json!({"component": 0})).unwrap();
-    h.frames(3);
-    // The feature and a component are selected: the cut takes the feature only.
-    h.app.run("select.set", json!({"items": [{"type": "feature", "id": id}, {"type": "occurrence", "path": [occurrence]}]})).unwrap();
-    h.frames(2);
-    let before = h.app.session.doc.to_json();
-    h.step(&json!({"key": "X", "cmd": true})).unwrap();
-    assert_eq!(h.app.status.as_ref().map(|s| (s.0.clone(), s.2)), Some((format!("Cut {name}"), false)));
-    assert_eq!(h.app.session.doc.to_json(), before, "the cut does not change the document");
-    h.app.run("component.activate", json!({"component": component})).unwrap();
-    h.step(&json!({"key": "V", "cmd": true})).unwrap();
-    let features = &h.app.session.doc.features;
-    assert_eq!(features.len(), 1, "{:?}", h.app.status);
-    assert_eq!((features[0].id, features[0].name.as_str(), features[0].component), (id, name.as_str(), component), "moved, not copied");
-    assert!(h.app.session.timeline_cut.is_empty());
-}
-
-#[test]
 fn ctrl_x_cuts_the_sketch_selection_and_ctrl_v_brings_it_back() {
     let (mut h, rect) = rectangle();
     let before = curves(&h);
@@ -469,7 +445,7 @@ fn a_cut_body_moves_into_the_component_it_is_pasted_in() {
     assert!(super::paste(&mut app, None));
     assert_eq!(owner(&app), part);
     assert_eq!(app.session.model.state().bodies.len(), 1, "moved, not copied");
-    assert!(app.cut_bodies.is_empty() && !super::can_paste(&app));
+    assert!(app.cut.is_empty() && !super::can_paste(&app));
     app.session.visibility.locked_bodies.push("Cube".into());
     app.run("select.set", json!({"items": [{"type": "body", "name": "Cube"}]})).unwrap();
     assert!(!super::can_cut(&app) && !super::cut(&mut app), "a locked body stays");
@@ -495,10 +471,80 @@ fn a_cut_component_moves_into_the_component_it_is_pasted_in() {
     assert_eq!(app.session.doc.occurrences.iter().find(|o| o.id == part_at).unwrap().parent, holder);
     assert_eq!(app.session.selection, vec![solidcraft_engine::Sel::Occurrence { path: vec![holder_at, part_at] }]);
     assert!(!crate::browser::is_open(&app, &format!("o:{holder_at}/{part_at}"), true), "it arrives folded");
-    assert!(app.cut_placements.is_empty() && !super::can_paste(&app));
+    assert!(app.cut.is_empty() && !super::can_paste(&app));
     app.run("occurrence.copy", json!({"component": holder})).unwrap();
     app.run("select.set", json!({"items": [{"type": "occurrence", "path": [holder_at]}]})).unwrap();
     assert!(!super::can_cut(&app) && !super::cut(&mut app), "an instance isn't cut");
+}
+
+/// Features and the body they made, selected together, are cut together: the body is left out of
+/// the cut set (it moves with the features, never on its own) and Paste moves the lot in one undo
+/// step.
+#[test]
+fn cut_features_and_their_body_move_in_one_step() {
+    let mut app = crate::SolveApp::new(solidcraft_engine::Session::default(), crate::Services::default());
+    app.run("sketch.create", json!({"plane": "XY", "name": "S"})).unwrap();
+    app.run("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [10, 10]})).unwrap();
+    app.run("sketch.finish", json!({})).unwrap();
+    app.run("solid.extrude", json!({"sketch": "S", "distance": 5, "body_name": "Block"})).unwrap();
+    let part = app.run("component.create", json!({"name": "Part", "activate": false})).unwrap()["component"].as_u64().unwrap();
+    let ids: Vec<u64> = ["S", "Extrude1"].iter().map(|n| app.session.doc.find_feature(n).unwrap().id).collect();
+    let items: Vec<Sel> = ids.iter().map(|id| Sel::Feature { id: *id }).chain([Sel::Body { name: "Block".into() }]).collect();
+    app.run("select.set", json!({ "items": items })).unwrap();
+    assert!(super::can_cut(&app) && super::cut(&mut app));
+    assert!(app.session.selection.is_empty(), "the cut set is what is marked, not the selection that chose it");
+    assert_eq!(app.cut.features, ids);
+    assert!(app.cut.bodies.is_empty(), "the body moves with the features that made it, not on its own");
+    assert!(!super::body_is_cut(&app, "Block"), "and is not marked as cut");
+    app.run("component.activate", json!({"component": part})).unwrap();
+    let steps = app.session.undo.len();
+    assert!(super::paste(&mut app, None));
+    assert!(ids.iter().all(|id| app.session.doc.feature(*id).is_some_and(|f| f.component == part)));
+    assert_eq!(app.session.undo.len(), steps + 1);
+    assert!(app.cut.is_empty() && !super::can_paste(&app));
+}
+
+/// A component takes what it holds: marking it leaves its features and bodies unmarked, so they
+/// are not outlined and the user need not select them.
+#[test]
+fn a_cut_component_leaves_what_it_holds_unmarked() {
+    let mut app = crate::SolveApp::new(solidcraft_engine::Session::default(), crate::Services::default());
+    let made = app.run("component.create", json!({"name": "Part"})).unwrap();
+    let (part, at) = (made["component"].as_u64().unwrap(), made["occurrence"].as_u64().unwrap());
+    app.run("solid.box", json!({"length": 5, "width": 5, "height": 5, "body_name": "Inner", "name": "InnerBox"})).unwrap();
+    app.run("component.activate", json!({"component": 0})).unwrap();
+    app.run("component.create", json!({"name": "Holder", "activate": false})).unwrap();
+    let inner = app.session.doc.find_feature("InnerBox").unwrap().id;
+    app.run("select.set", json!({"items": [Sel::Occurrence { path: vec![at] }, Sel::Feature { id: inner }, Sel::Body { name: "Inner".into() }]}))
+        .unwrap();
+    assert!(super::cut(&mut app));
+    assert_eq!(app.cut.placements, vec![vec![at]]);
+    assert!(app.cut.features.is_empty() && app.cut.bodies.is_empty());
+    assert!(!super::body_is_cut(&app, "Inner"));
+    let _ = part;
+}
+
+/// A paste that can't be done says so and keeps the cut, to paste somewhere else.
+#[test]
+fn a_cut_that_cannot_move_stays_cut() {
+    let mut app = crate::SolveApp::new(solidcraft_engine::Session::default(), crate::Services::default());
+    app.run("sketch.create", json!({"plane": "XY", "name": "S1"})).unwrap();
+    app.run("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [20, 20]})).unwrap();
+    app.run("sketch.finish", json!({})).unwrap();
+    app.run("solid.extrude", json!({"sketch": "S1", "distance": 10, "body_name": "Block"})).unwrap();
+    app.run("sketch.create", json!({"plane": "XY", "name": "S2"})).unwrap();
+    app.run("sketch.rectangle.two_point", json!({"p0": [5, 5], "p1": [10, 10]})).unwrap();
+    app.run("sketch.finish", json!({})).unwrap();
+    app.run("solid.extrude", json!({"sketch": "S2", "distance": 4, "operation": "cut", "name": "Cut1"})).unwrap();
+    let part = app.run("component.create", json!({"name": "Part", "activate": false})).unwrap()["component"].as_u64().unwrap();
+    let ids: Vec<u64> = ["S2", "Cut1"].iter().map(|n| app.session.doc.find_feature(n).unwrap().id).collect();
+    app.run("select.set", json!({"items": ids.iter().map(|id| Sel::Feature { id: *id }).collect::<Vec<_>>()})).unwrap();
+    assert!(super::cut(&mut app));
+    app.run("component.activate", json!({"component": part})).unwrap();
+    let before = app.session.doc.to_json();
+    assert!(!super::paste(&mut app, None), "the cut would be left without its body");
+    assert_eq!(app.session.doc.to_json(), before);
+    assert_eq!(app.cut.features, ids, "the cut is kept");
 }
 
 /// A copied body pastes into a component's Bodies folder from the folder's menu: the copy goes
@@ -739,7 +785,7 @@ fn a_second_placements_body_copies_but_is_not_cut() {
     select(&mut app, json!({"type": "body", "name": seen}));
     assert!(!super::can_cut(&app));
     assert!(!super::cut(&mut app));
-    assert!(app.cut_bodies.is_empty() && !super::can_paste(&app));
+    assert!(app.cut.is_empty() && !super::can_paste(&app));
     assert!(app.status.as_ref().is_some_and(|(text, _, error)| *error && text.contains("placed copy")), "{:?}", app.status);
     select(&mut app, json!({"type": "body", "name": seen}));
     assert!(super::copy(&mut app));
