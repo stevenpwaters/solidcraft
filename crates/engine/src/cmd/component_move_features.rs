@@ -52,7 +52,7 @@ pub(super) fn move_features(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // A join or boolean whose inputs would end up in two components.
     for f in &s.doc.features {
-        let mut inputs: BTreeSet<String> = f.kind.body_refs().into_iter().collect();
+        let mut inputs: BTreeSet<String> = f.kind.input_bodies().into_iter().collect();
         inputs.extend(f.participants.iter().cloned());
         let (inside, outside) =
             (inputs.iter().filter(|b| moved_bodies.contains(*b)).count(), inputs.iter().filter(|b| !moved_bodies.contains(*b)).count());

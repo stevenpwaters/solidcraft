@@ -672,6 +672,22 @@ fn bodies_cut_in_another_design_paste_as_copies() {
     assert!(!super::can_paste(&app), "Esc left nothing to paste");
 }
 
+/// Features never leave their design: a cut that holds one leaves another design nothing to paste,
+/// while its own design still pastes it.
+#[test]
+fn a_cut_with_a_feature_leaves_another_design_nothing_to_paste() {
+    let mut app = crate::SolveApp::new(design_with_cube("Bracket"), crate::Services::default());
+    app.run("solid.box", json!({"length":1,"width":1,"height":1,"body_name":"Pin","operation":"new_body","translate":[10,0,0]})).unwrap();
+    let first = app.session.doc.features[0].id;
+    app.run("select.set", json!({"items": [Sel::Feature { id: first }, Sel::Body { name: "Pin".into() }]})).unwrap();
+    assert!(super::cut(&mut app));
+    assert_eq!((app.cut.features.clone(), app.cut.bodies.clone()), (vec![first], vec!["Pin".to_string()]));
+    crate::documents::open_tab(&mut app, solidcraft_engine::Session::default()).unwrap();
+    assert!(!super::can_paste(&app), "a feature stays in its design");
+    crate::documents::switch(&mut app, 0);
+    assert!(super::can_paste(&app), "its own design still pastes the cut");
+}
+
 /// Components copied in one design paste into another as independent copies with their history
 /// (Paste and Paste New alike), named as they were, folded and selected; the original stays.
 #[test]

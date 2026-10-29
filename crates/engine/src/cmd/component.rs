@@ -12,7 +12,8 @@ use solidcraft_geom::Vec3;
 use super::CommandSpec;
 use crate::params::{bad, bool_, str_, string_list, vec3};
 use crate::schema::component::{
-    EditInPlaceParams, EditInPlaceResult, FinishEditParams, FinishEditResult, OccurrenceAlignParams, OccurrenceAlignResult,
+    EditInPlaceParams, EditInPlaceResult, FinishEditParams, FinishEditResult, MoveFeaturesParams, MoveFeaturesResult, OccurrenceAlignParams,
+    OccurrenceAlignResult, ReparentItemsParams, ReparentItemsResult,
 };
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{Result, Session};
@@ -119,7 +120,29 @@ pub static COMMANDS: &[CommandSpec] = &[
          A component that uses what isn't in it (another body, sketch or parameter) is refused, saying what. Returns \
          `bodies` and `feature`, or the pasted components' `paths`",
     ),
-    CommandSpec::new("component.move_sketches", "Move Sketches to Component", move_sketches).icon("move").params("sketches: [ids or names], component"),
+    CommandSpec::new("component.move_sketches", "Move Sketches to Component", move_sketches)
+        .icon("move")
+        .params("sketches: [ids or names], component; the sketches keep their own coordinates (component.move_features keeps them where they are in the world)"),
+    CommandSpec::new("component.move_features", "Move Features to Component", crate::checked!("component.move_features", move_features::move_features))
+        .icon("move")
+        .contract(&MOVE_FEATURES_CONTRACT)
+        .output(output_schema_for::<MoveFeaturesResult>)
+        .params(
+            "features: [ids or names] (sketches too); component?: where they go (default: the active one) → moved, component, bodies. \
+             Ids, names and timeline order stay; the geometry stays where it is in the world; the bodies the features made move with \
+             them. Refused while the timeline is rolled back, for a component placed more than once, and for a move that would break \
+             a feature (nothing changes)",
+        ),
+    CommandSpec::new("browser.reparent", "Move to Component", crate::checked!("browser.reparent", reparent_items::reparent_items))
+        .icon("move")
+        .contract(&REPARENT_ITEMS_CONTRACT)
+        .output(output_schema_for::<ReparentItemsResult>)
+        .params(
+            "Moves placements, features and bodies into a component. occurrences?: [ids or paths], features?: [ids or names], bodies?: [names], component?: where they go (default: the active \
+             one), component_path?: its placement → component, occurrences, features, bodies (what moved). One undo step, all or \
+             nothing: placements move first (taking what they hold), then features (taking the bodies they made), then the bodies \
+             still elsewhere (a body transfer, which leaves its features behind)",
+        ),
     CommandSpec::new("occurrence.copy", "Paste (Instance)", copy_occurrence).icon("copy")
         .params("component (or occurrence): what to place again; path?: validates selected occurrence; parent?: component (default: the same parent); translate?: [x,y,z]; in_place?: bool (default false: the selected transform within the parent; true: where the selected placement is in the world, translate in world axes; a parent placed more than once is placed by parent_path?, else the active placement, and every instance gets the copy). Copies the selected effective transform, including pending moves"),
     CommandSpec::new("component.paste_new", "Paste New", paste_new).icon("paste").params("component: independently copy its nested definition graph and history, materials and styles; occurrence?, path?: selected source placement; parent?: component the copy goes in (default: the source placement's; not the component or one inside it); in_place?, parent_path?: as occurrence.copy; translate?: [x,y,z]. Reassigned external bodies become base geometry; retained external links and omitted boundary joints are reported"),

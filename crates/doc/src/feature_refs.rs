@@ -33,17 +33,6 @@ impl FeatureKind {
         v
     }
 
-    /// The bodies the feature names (the bodies it works on), in the order it holds them.
-    pub fn body_refs(&self) -> Vec<String> {
-        let mut v = Vec::new();
-        self.walk_refs(&mut |r| {
-            if let Ref::Body(name) = r {
-                v.push(name.as_ref().to_string());
-            }
-        });
-        v
-    }
-
     /// Whether the feature refers to the feature `id` (by id: a patterned or mirrored feature,
     /// the construction plane a plane is built on) or names it (`name`: a construction axis or
     /// point it is built from). Used to refuse a feature built on itself (#3567).
