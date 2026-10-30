@@ -2370,4 +2370,107 @@ mod tests {
         let e = s.execute("browser.visibility", &json!({"visible": false, "features": ["Sphere1"], "path": [first]})).expect_err("other component");
         assert!(e.to_string().contains("component"), "{e}");
     }
+
+    use solidcraft_doc::{BrowserEntry, MAX_GROUP_NESTING};
+
+    fn three_bodies(s: &mut Session) {
+        for (i, name) in ["A", "B", "C"].into_iter().enumerate() {
+            run(s, "solid.box", json!({"length": 10, "width": 10, "height": 10, "corner": [i as f64 * 20.0, 0, 0], "body_name": name}));
+        }
+    }
+
+    fn new_group(s: &mut Session, mut p: Value) -> u64 {
+        p["folder"] = json!("bodies");
+        run(s, "browser.group", p)["group"].as_u64().unwrap()
+    }
+
+    fn state(s: &Session) -> (Vec<solidcraft_doc::BrowserGroup>, std::collections::BTreeMap<String, Vec<BrowserEntry>>) {
+        (s.doc.browser_groups.clone(), s.doc.browser_order.clone())
+    }
+
+    fn refused(s: &mut Session, id: &str, p: Value) {
+        let before = s.doc.to_json();
+        let r = s.execute(id, &p);
+        assert!(matches!(r, Err(crate::EngineError::BadParams { .. })), "{id} {p}: {r:?}");
+        assert_eq!(s.doc.to_json(), before, "{id} {p}: a refused command changes nothing");
+    }
+
+    /// Nest a group, order groups and components, ungroup; each step undoes and redoes, and none of
+    /// it evaluates anything.
+    #[test]
+    fn groups_nest_reorder_and_ungroup_with_undo_redo_and_no_evaluation() {
+        let mut s = Session::default();
+        three_bodies(&mut s);
+        let mut placed = Vec::new();
+        for name in ["P", "Q"] {
+            placed.push(run(&mut s, "component.create", json!({"name": name}))["occurrence"].as_u64().unwrap());
+            run(&mut s, "component.activate", json!({"component": 0}));
+        }
+        let mut states = vec![state(&s)];
+        s.evaluations = 0;
+        let outer = new_group(&mut s, json!({"items": ["A"]}));
+        states.push(state(&s));
+        // The inner group takes its component and folder from the parent.
+        let inner = run(&mut s, "browser.group", json!({"parent": outer, "items": ["B"]}))["group"].as_u64().unwrap();
+        states.push(state(&s));
+        let g = s.doc.browser_group(inner).unwrap();
+        assert_eq!((g.parent, g.component, g.folder.as_str()), (Some(outer), 0, "bodies"));
+        run(&mut s, "browser.order", json!({"folder": "components", "order": [placed[1].to_string(), placed[0].to_string()]}));
+        states.push(state(&s));
+        let mut shown = placed.clone();
+        s.doc.sort_placements(0, &mut shown);
+        assert_eq!(shown, [placed[1], placed[0]]);
+        run(&mut s, "browser.order", json!({"folder": "bodies", "order": ["C", outer]}));
+        states.push(state(&s));
+        run(&mut s, "browser.move", json!({"folder": "bodies", "items": [inner], "before": "C"}));
+        states.push(state(&s));
+        assert_eq!(s.doc.ordered_entries(0, "bodies", None), [BrowserEntry::Group(inner), "C".into(), BrowserEntry::Group(outer)]);
+        run(&mut s, "browser.ungroup", json!({"group": outer}));
+        states.push(state(&s));
+        // The group's items go where it was.
+        assert_eq!(s.doc.browser_order["0/bodies"], [BrowserEntry::Group(inner), "C".into(), "A".into()]);
+        for i in (0..states.len() - 1).rev() {
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(state(&s), states[i], "undo to step {i}");
+        }
+        for (i, expected) in states.iter().enumerate().skip(1) {
+            run(&mut s, "edit.redo", json!({}));
+            assert_eq!(state(&s), *expected, "redo to step {i}");
+        }
+        assert_eq!(s.evaluations, 0, "changing only the browser evaluates nothing");
+    }
+
+    #[test]
+    fn nesting_and_ordering_that_cannot_stand_are_refused() {
+        let mut s = Session::default();
+        three_bodies(&mut s);
+        let part = run(&mut s, "component.create", json!({"name": "Part"}));
+        run(&mut s, "component.activate", json!({"component": 0}));
+        let outer = new_group(&mut s, json!({"items": ["A"]}));
+        let inner = new_group(&mut s, json!({"parent": outer}));
+        // A group inside itself or its own child.
+        refused(&mut s, "browser.move", json!({"folder": "bodies", "items": [outer], "group": outer}));
+        refused(&mut s, "browser.move", json!({"folder": "bodies", "items": [outer], "group": inner}));
+        // Past eight levels, by a new group or by moving one with a child of its own.
+        let mut chain = vec![new_group(&mut s, json!({}))];
+        while chain.len() < MAX_GROUP_NESTING {
+            chain.push(new_group(&mut s, json!({"parent": chain[chain.len() - 1]})));
+        }
+        refused(&mut s, "browser.group", json!({"folder": "bodies", "parent": chain[MAX_GROUP_NESTING - 1]}));
+        let heavy = new_group(&mut s, json!({}));
+        new_group(&mut s, json!({"parent": heavy}));
+        refused(&mut s, "browser.move", json!({"folder": "bodies", "items": [heavy], "group": chain[MAX_GROUP_NESTING - 2]}));
+        // A parent that is missing, or in another folder or component.
+        refused(&mut s, "browser.group", json!({"folder": "bodies", "parent": 424242}));
+        refused(&mut s, "browser.group", json!({"folder": "sketches", "parent": outer}));
+        refused(&mut s, "browser.group", json!({"parent": outer, "component": part["component"]}));
+        // Orders and moves naming a group that cannot be there; a number is a group, not an item key.
+        refused(&mut s, "browser.order", json!({"folder": "bodies", "order": [inner]}));
+        refused(&mut s, "browser.order", json!({"folder": "bodies", "order": [424242]}));
+        refused(&mut s, "browser.move", json!({"folder": "bodies", "items": ["B"], "before": 424242}));
+        refused(&mut s, "browser.group", json!({"folder": "bodies", "items": [12]}));
+        // The components folder takes placements of that component, and nothing else.
+        refused(&mut s, "browser.order", json!({"folder": "components", "order": ["424242"]}));
+        refused(&mut s, "browser.order", json!({"folder": "components", "order": [outer]}));
+    }
 }

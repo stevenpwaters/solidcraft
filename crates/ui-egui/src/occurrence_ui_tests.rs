@@ -538,3 +538,26 @@ fn dragging_an_occurrence_row_onto_another_moves_it_into_that_component() {
     let o = h.app.session.doc.occurrences.iter().find(|o| o.id == a_occ).unwrap();
     assert_eq!(o.parent, 0, "A's occurrence moved back out to the design");
 }
+
+/// Dropping a placement row on the top of a sibling's row puts it before that sibling, in the
+/// order saved with the design; the rows follow. (The middle of a row moves it into that
+/// component, as above.)
+#[test]
+fn dragging_an_occurrence_row_onto_the_top_of_a_sibling_reorders_them() {
+    let mut h = Harness::new();
+    let mut placed = Vec::new();
+    for name in ["A", "B", "C"] {
+        placed.push(h.app.run("component.create", json!({"name":name})).unwrap()["occurrence"].as_u64().unwrap());
+        h.app.run("component.activate", json!({"component":0})).unwrap();
+    }
+    let [a, b, c] = [placed[0], placed[1], placed[2]];
+    h.frames(3);
+    let row = |id: u64| crate::scenario::handle_at(&format!("row:occurrence:{id}")).unwrap();
+    let (from, to) = (row(c), row(a));
+    assert_eq!(h.call("ui.drag", json!({"x0":from.x,"y0":from.y,"x1":to.x,"y1":to.y - 10.0,"steps":12}))["ok"], true);
+    h.frames(3);
+    let saved = &h.app.session.doc.browser_order["0/components"];
+    assert_eq!(*saved, [c, a, b].map(|id| solidcraft_engine::doc::BrowserEntry::item(&id.to_string())));
+    assert!(row(c).y < row(a).y && row(a).y < row(b).y, "the rows follow the saved order");
+    assert!(h.app.session.doc.occurrences.iter().all(|o| o.parent == 0), "none moved into another");
+}
